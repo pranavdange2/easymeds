@@ -1,34 +1,22 @@
 """
 Flask API wrapper for Medicine Price Scraper
-Deploys on Railway.app
+Lightweight version without Selenium - uses HTTP requests only
 """
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import sys
-import os
-import time
+import requests
+from bs4 import BeautifulSoup
 import re
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+import time
 
 app = Flask(__name__)
 CORS(app)
 
-def get_driver():
-    """Setup Selenium driver with auto-managed ChromeDriver"""
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=options)
+# Headers to avoid being blocked
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
 
 def clean_price(text):
     """Extract price from text"""
@@ -39,162 +27,133 @@ def clean_price(text):
     return float(match.group()) if match else None
 
 def scrape_netmeds(medicine):
-    """Scrape Netmeds"""
+    """Scrape Netmeds with HTTP requests"""
     try:
-        driver = get_driver()
         url = f"https://www.netmeds.com/catalogsearch/result/{medicine.replace(' ', '-')}/all"
-        driver.get(url)
-        time.sleep(4)
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
         
-        soup_source = driver.page_source
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        try:
-            product_elem = driver.find_element(By.CSS_SELECTOR, "div[class*='product'], div[class*='cat-'], div[class*='item']")
-            product_text = product_elem.text
+        # Find product container
+        product = soup.find('div', {'class': re.compile(r'product|item')})
+        if product:
+            price_text = product.find('span', {'class': re.compile(r'price|cost')})
+            name_text = product.find('a', {'class': re.compile(r'title|name')})
             
-            price_match = re.search(r'₹\s*(\d+\.?\d*)', product_text)
-            if price_match:
-                price = float(price_match.group(1))
-                name = product_text.split('\n')[0][:80]
+            if price_text and name_text:
+                price = clean_price(price_text.get_text())
+                name = name_text.get_text().strip()[:80]
                 
-                driver.quit()
-                return {
-                    'pharmacy': 'Netmeds',
-                    'medicine': name,
-                    'price': price,
-                    'url': url
-                }
-        except:
-            pass
-        
-        driver.quit()
+                if price:
+                    return {
+                        'pharmacy': 'Netmeds',
+                        'medicine': name,
+                        'price': price,
+                        'url': url
+                    }
         return None
     except Exception as e:
-        if 'driver' in locals():
-            driver.quit()
+        print(f"[Netmeds Error] {str(e)[:50]}")
         return None
 
 def scrape_apollo(medicine):
-    """Scrape Apollo Pharmacy"""
+    """Scrape Apollo Pharmacy with HTTP requests"""
     try:
-        driver = get_driver()
         url = f"https://www.apollopharmacy.in/search-medicines/{medicine.replace(' ', '%20')}"
-        driver.get(url)
-        time.sleep(4)
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
         
-        try:
-            product = driver.find_element(By.CSS_SELECTOR, "div[class*='ProductCard']")
-            product_text = product.text
-            
-            price_match = re.search(r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', product_text)
-            price = clean_price(price_match.group(1)) if price_match else None
-            
-            name = product_text.split('\n')[0][:80] if product_text else medicine
-            
-            try:
-                link_elem = product.find_element(By.TAG_NAME, 'a')
-                link = link_elem.get_attribute('href')
-            except:
-                link = url
-            
-            driver.quit()
-            
-            if price:
-                return {
-                    'pharmacy': 'Apollo Pharmacy',
-                    'medicine': name,
-                    'price': price,
-                    'url': link
-                }
-        except:
-            pass
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        driver.quit()
+        # Find product container
+        product = soup.find('div', {'class': re.compile(r'ProductCard|product-card')})
+        if product:
+            price_text = product.find('span', {'class': re.compile(r'price|cost|amount')})
+            name_text = product.find(['a', 'span'], {'class': re.compile(r'title|name|product-title')})
+            
+            if price_text and name_text:
+                price = clean_price(price_text.get_text())
+                name = name_text.get_text().strip()[:80]
+                
+                if price:
+                    link = product.find('a')
+                    link_url = link.get('href', url) if link else url
+                    
+                    return {
+                        'pharmacy': 'Apollo Pharmacy',
+                        'medicine': name,
+                        'price': price,
+                        'url': link_url
+                    }
         return None
     except Exception as e:
-        if 'driver' in locals():
-            driver.quit()
+        print(f"[Apollo Error] {str(e)[:50]}")
         return None
 
 def scrape_pharmeasy(medicine):
-    """Scrape PharmEasy"""
+    """Scrape PharmEasy with HTTP requests"""
     try:
-        driver = get_driver()
         url = f"https://pharmeasy.in/search/all?name={medicine.replace(' ', '%20')}"
-        driver.get(url)
-        time.sleep(5)
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
         
-        try:
-            product = driver.find_element(By.CSS_SELECTOR, "div[class*='ProductCard']")
-            product_text = product.text
-            
-            price_match = re.search(r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', product_text)
-            price = clean_price(price_match.group(1)) if price_match else None
-            
-            name = product_text.split('\n')[0][:80] if product_text else medicine
-            
-            try:
-                link_elem = product.find_element(By.TAG_NAME, 'a')
-                link = link_elem.get_attribute('href')
-            except:
-                link = url
-            
-            driver.quit()
-            
-            if price:
-                return {
-                    'pharmacy': 'PharmEasy',
-                    'medicine': name,
-                    'price': price,
-                    'url': link
-                }
-        except:
-            pass
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        driver.quit()
+        # Find product container
+        product = soup.find('div', {'class': re.compile(r'ProductCard|product-card|medicine-item')})
+        if product:
+            price_text = product.find('span', {'class': re.compile(r'price|cost|amount')})
+            name_text = product.find(['a', 'span'], {'class': re.compile(r'title|name|product-name')})
+            
+            if price_text and name_text:
+                price = clean_price(price_text.get_text())
+                name = name_text.get_text().strip()[:80]
+                
+                if price:
+                    link = product.find('a')
+                    link_url = link.get('href', url) if link else url
+                    
+                    return {
+                        'pharmacy': 'PharmEasy',
+                        'medicine': name,
+                        'price': price,
+                        'url': link_url
+                    }
         return None
     except Exception as e:
-        if 'driver' in locals():
-            driver.quit()
+        print(f"[PharmEasy Error] {str(e)[:50]}")
         return None
 
 def scrape_1mg(medicine):
-    """Scrape 1mg"""
+    """Scrape 1mg with HTTP requests"""
     try:
-        driver = get_driver()
         url = f"https://www.1mg.com/search/all?name={medicine.replace(' ', '%20')}"
-        driver.get(url)
-        time.sleep(5)
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
         
-        driver.execute_script("window.scrollTo(0, 500);")
-        time.sleep(2)
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        try:
-            all_links = driver.find_elements(By.TAG_NAME, 'a')
-            for link in all_links[:20]:
-                link_text = link.text
-                if '₹' in link_text and len(link_text) > 10:
-                    price_match = re.search(r'₹\s*(\d+\.?\d*)', link_text)
-                    if price_match:
-                        price = float(price_match.group(1))
-                        name = link_text.split('\n')[0][:80]
-                        link_url = link.get_attribute('href')
-                        
-                        driver.quit()
-                        return {
-                            'pharmacy': '1mg',
-                            'medicine': name,
-                            'price': price,
-                            'url': link_url if link_url else url
-                        }
-        except:
-            pass
+        # Find product containers
+        products = soup.find_all('a', {'class': re.compile(r'product|medicine|item')}, limit=20)
         
-        driver.quit()
+        for product in products:
+            price_text = product.find('span', {'class': re.compile(r'price|cost')})
+            if price_text:
+                price = clean_price(price_text.get_text())
+                name = product.get_text().strip().split('\n')[0][:80]
+                link_url = product.get('href', url)
+                
+                if price and name and len(name) > 3:
+                    return {
+                        'pharmacy': '1mg',
+                        'medicine': name,
+                        'price': price,
+                        'url': link_url
+                    }
         return None
     except Exception as e:
-        if 'driver' in locals():
-            driver.quit()
+        print(f"[1mg Error] {str(e)[:50]}")
         return None
 
 @app.route('/health', methods=['GET'])
@@ -209,14 +168,14 @@ def search():
         data = request.json
         medicine = data.get('medicine', '').strip()
         
-        if not medicine:
+        if not medicine or len(medicine) < 2:
             return jsonify({'error': 'Please enter a medicine name'}), 400
         
         results = []
         
         scrapers = [
-            scrape_netmeds,
             scrape_1mg,
+            scrape_netmeds,
             scrape_apollo,
             scrape_pharmeasy,
         ]
@@ -226,10 +185,10 @@ def search():
                 result = scraper_func(medicine)
                 if result and result.get('price'):
                     results.append(result)
-            except:
+                    time.sleep(0.5)  # Small delay to avoid rate limiting
+            except Exception as e:
+                print(f"Scraper error: {str(e)[:50]}")
                 pass
-            
-            time.sleep(2)
         
         # Sort by price
         results.sort(key=lambda x: x['price'] if x['price'] else float('inf'))
@@ -242,7 +201,7 @@ def search():
         savings_percentage = None
         if len(results) > 1:
             savings = results[-1]['price'] - results[0]['price']
-            savings_percentage = (savings / results[-1]['price']) * 100
+            savings_percentage = (savings / results[-1]['price']) * 100 if results[-1]['price'] > 0 else 0
         
         return jsonify({
             'medicine': medicine,
@@ -253,8 +212,10 @@ def search():
             'count': len(results)
         }), 200
     except Exception as e:
+        print(f"Search error: {str(e)}")
         return jsonify({'error': f'Server error: {str(e)[:100]}'}), 500
 
 if __name__ == '__main__':
+    import os
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
