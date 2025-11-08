@@ -1,0 +1,9 @@
+workers = 2
+threads = 8
+worker_class = "gthread"
+bind = "0.0.0.0:8080"
+keepalive = 30
+timeout = 60
+accesslog = "-"
+errorlog = "-"
+loglevel = "info"
